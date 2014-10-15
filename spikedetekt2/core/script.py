@@ -36,11 +36,12 @@ def _load_files_info(prm_filename, dir=None):
     nchannels = prm.get('nchannels')
     assert nchannels > 0
     
-    # Find PRB path in PRM file, and load it.
+    # Find PRB path in PRM file, and load it
     prb_filename = prm.get('prb_file')
     if not op.exists(prb_filename):
         prb_filename = op.join(dir, prb_filename)
     prb = load_probe(prb_filename)
+
         
     # Find raw data source.
     data = prm.get('raw_data_files')
@@ -88,7 +89,7 @@ def check_path():
 # -----------------------------------------------------------------------------
 # SpikeDetekt
 # -----------------------------------------------------------------------------
-def run_spikedetekt(prm_filename, dir=None, debug=False):
+def run_spikedetekt(prm_filename, dir=None, debug=False, convert_only=False):
     info = _load_files_info(prm_filename, dir=dir)
     experiment_name = info['experiment_name']
     prm = info['prm']
@@ -109,7 +110,7 @@ def run_spikedetekt(prm_filename, dir=None, debug=False):
     with Experiment(experiment_name, dir=dir, mode='a') as exp:
         run(read_raw(data, nchannels=nchannels), 
             experiment=exp, prm=prm, probe=Probe(prb),
-            _debug=debug)
+            _debug=debug, convert_only=convert_only)
 
 
 # -----------------------------------------------------------------------------
@@ -232,12 +233,12 @@ def run_klustakwik(filename, dir=None, **kwargs):
 # All-in-one script
 # -----------------------------------------------------------------------------
 def run_all(prm_filename, dir=None, debug=False, overwrite=False, 
-            runsd=True, runkk=True):
+            runsd=True, runkk=True, convert_only=False):
             
     if not os.path.exists(prm_filename):
         exception("The PRM file {0:s} doesn't exist.".format(prm_filename))
         return
-            
+    
     info = _load_files_info(prm_filename, dir=dir)
     experiment_name = info['experiment_name']
     prm = info['prm']
@@ -250,11 +251,11 @@ def run_all(prm_filename, dir=None, debug=False, overwrite=False,
             delete_files(experiment_name, dir=dir, types=('kwik', 'kwx', 'high.kwd', 'low.kwd'))
         else:
             print(("The files already exist, delete them first "
-                  "if you want to run the process again, or user the "
+                  "if you want to run the process again, or use the "
                   "--overwrite option."))
     
     if runsd:
-        run_spikedetekt(prm_filename, dir=dir, debug=debug)
+        run_spikedetekt(prm_filename, dir=dir, debug=debug, convert_only=convert_only)
     if runkk:
         run_klustakwik(experiment_name, dir=dir, **prm)
         
@@ -279,17 +280,17 @@ def main():
                        help='only convert raw data to Kwik format, no spike detection')
 
     args = parser.parse_args()
-    runsd, runkk = True, True
+    runsd, runkk, convert_only = True, True, False
     if args.detect_only:
         runkk = False
     if args.cluster_only:
         runsd = False
     if args.convert_only:
-        runsd = False
         runkk = False
+        convert_only = True
     
     run_all(args.prm_file, debug=args.debug, overwrite=args.overwrite,
-            runsd=runsd, runkk=runkk)
+            runsd=runsd, runkk=runkk, convert_only=convert_only)
         
 if __name__ == '__main__':
     main()
