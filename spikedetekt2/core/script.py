@@ -274,7 +274,9 @@ def main():
     parser.add_argument('--detect-only', action='store_true', default=False,
                        help='run only spikedetekt')
     parser.add_argument('--cluster-only', action='store_true', default=False,
-                       help='run only klustakwik (after spikedetekt has run)')
+                       help='run only klustakwik (after spikedetekt has run)')              
+    parser.add_argument('--convert-only', action='store_true', default=False,
+                       help='only convert raw data to Kwik format, no spike detection')
 
     args = parser.parse_args()
     runsd, runkk = True, True
@@ -282,6 +284,9 @@ def main():
         runkk = False
     if args.cluster_only:
         runsd = False
+    if args.convert_only:
+        runsd = False
+        runkk = False
     
     run_all(args.prm_file, debug=args.debug, overwrite=args.overwrite,
             runsd=runsd, runkk=runkk)
