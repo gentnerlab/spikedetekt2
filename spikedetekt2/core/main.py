@@ -128,6 +128,50 @@ def save_features(experiment, **prm):
             features = project_pcs(waveform, pcs)
             spikes.features_masks[i,:,0] = features.ravel()
 
+def extract_spikes((chunk_fil,chunk_raw)):
+    # Apply thresholds.
+    chunk_detect, chunk_threshold = apply_threshold(chunk_fil,
+        threshold=threshold, **prm)
+
+    # Remove dead channels.
+    dead = np.setdiff1d(np.arange(nchannels), probe.channels)
+    chunk_detect[:,dead] = 0
+    chunk_threshold.strong[:,dead] = 0
+    chunk_threshold.weak[:,dead] = 0
+
+    # Find connected component (strong threshold). Return list of
+    # Component instances.
+    components = connected_components(
+        chunk_strong=chunk_threshold.strong,
+        chunk_weak=chunk_threshold.weak,
+        probe_adjacency_list=probe.adjacency_list,
+        chunk=chunk, **prm)
+
+    # Now we extract the spike in each component.
+    waveforms = extract_waveforms(chunk_detect=chunk_detect,
+        threshold=threshold, chunk_fil=chunk_fil, chunk_raw=chunk_raw,
+        probe=probe, components=components, **prm)
+
+    # Log number of spikes in the chunk.
+    nspikes += len(waveforms)
+
+    return waveforms
+
+def filter_chunk(chunk):
+    nsamples = chunk.nsamples
+    rec = chunk.recording
+    nrecs = chunk.nrecordings
+    s_end = chunk.s_end
+
+    # Filter the (full) chunk.
+    chunk_raw = chunk.data_chunk_full  # shape: (nsamples, nchannels)
+    chunk_fil = apply_filter(chunk_raw, filter=filter)
+    chunk_low = decimate(chunk_raw)
+
+    i = chunk.keep_start - chunk.s_start
+    j = chunk.keep_end - chunk.s_start
+    return chunk_raw, chunk_fil, chunk_low, i, j
+
 
 # -----------------------------------------------------------------------------
 # File logger
@@ -188,24 +232,12 @@ def run(raw_data=None, experiment=None, prm=None, probe=None,
     progress_bar = ProgressReporter(period=30.)
     nspikes = 0
 
-    # Loop through all chunks with overlap.
-    for chunk in raw_data.chunks(chunk_size=chunk_size,
-                                 chunk_overlap=chunk_overlap,):
-        # Log.
+    pool = multiprocessing.Pool()
+    filter_results = pool.map(filter_chunk,raw_data.chunks(chunk_size=chunk_size,chunk_overlap=chunk_overlap))
+    raw_chunks, filtered_chunks, _, _, _ = zip(*filter_results)
+
+    for chunk_raw, chunk_fil, chunk_low, i, j in filter_results:
         debug("Processing chunk {0:s}...".format(chunk))
-
-        nsamples = chunk.nsamples
-        rec = chunk.recording
-        nrecs = chunk.nrecordings
-        s_end = chunk.s_end
-
-        # Filter the (full) chunk.
-        chunk_raw = chunk.data_chunk_full  # shape: (nsamples, nchannels)
-        chunk_fil = apply_filter(chunk_raw, filter=filter)
-
-        i = chunk.keep_start - chunk.s_start
-        j = chunk.keep_end - chunk.s_start
-
         # Add the data to the KWD files.
         if prm.get('save_raw', False):
             # Do not append the raw data to the .kwd file if we're already reading
@@ -222,42 +254,16 @@ def run(raw_data=None, experiment=None, prm=None, probe=None,
 
         if prm.get('save_low', True):
             # Save LFP.
-            chunk_low = decimate(chunk_raw)
             chunk_low_keep = chunk_low[i//16:j//16,:]
             experiment.recordings[chunk.recording].low.append(convert_dtype(chunk_low_keep, np.int16))
 
-        # Apply thresholds.
-        chunk_detect, chunk_threshold = apply_threshold(chunk_fil,
-            threshold=threshold, **prm)
+    debug("Filtering complete")
 
-        # Remove dead channels.
-        dead = np.setdiff1d(np.arange(nchannels), probe.channels)
-        chunk_detect[:,dead] = 0
-        chunk_threshold.strong[:,dead] = 0
-        chunk_threshold.weak[:,dead] = 0
-
-        # Find connected component (strong threshold). Return list of
-        # Component instances.
-        components = connected_components(
-            chunk_strong=chunk_threshold.strong,
-            chunk_weak=chunk_threshold.weak,
-            probe_adjacency_list=probe.adjacency_list,
-            chunk=chunk, **prm)
-
-        # Now we extract the spike in each component.
-        waveforms = extract_waveforms(chunk_detect=chunk_detect,
-            threshold=threshold, chunk_fil=chunk_fil, chunk_raw=chunk_raw,
-            probe=probe, components=components, **prm)
-
-        # Log number of spikes in the chunk.
-        nspikes += len(waveforms)
-
+    all_waveforms = pool.map(extract_spikes,zip(filtered_chunks,raw_chunks))
+    
+    for waveforms in all_waveforms:
         # We sort waveforms by increasing order of fractional time.
         [add_waveform(experiment, waveform) for waveform in sorted(waveforms)]
-
-        # Update the progress bar.
-        progress_bar.update(rec/float(nrecs) + (float(s_end) / (nsamples*nrecs)),
-            '%d spikes found.' % (nspikes))
 
         # DEBUG: keep only the first shank.
         if _debug:
