@@ -128,6 +128,31 @@ def save_features(experiment, **prm):
             features = project_pcs(waveform, pcs)
             spikes.features_masks[i,:,0] = features.ravel()
 
+def extract_spikes(chunk_fil):
+    # Apply thresholds.
+    chunk_detect, chunk_threshold = apply_threshold(chunk_fil,
+        threshold=threshold, **prm)
+
+    # Remove dead channels.
+    dead = np.setdiff1d(np.arange(nchannels), probe.channels)
+    chunk_detect[:,dead] = 0
+    chunk_threshold.strong[:,dead] = 0
+    chunk_threshold.weak[:,dead] = 0
+
+    # Find connected component (strong threshold). Return list of
+    # Component instances.
+    components = connected_components(
+        chunk_strong=chunk_threshold.strong,
+        chunk_weak=chunk_threshold.weak,
+        probe_adjacency_list=probe.adjacency_list,
+        chunk=chunk, **prm)
+
+    # Now we extract the spike in each component.
+    waveforms = extract_waveforms(chunk_detect=chunk_detect,
+        threshold=threshold, chunk_fil=chunk_fil, chunk_raw=chunk_raw,
+        probe=probe, components=components, **prm)
+
+    return waveforms
 
 # -----------------------------------------------------------------------------
 # File logger
@@ -188,6 +213,7 @@ def run(raw_data=None, experiment=None, prm=None, probe=None,
     progress_bar = ProgressReporter(period=30.)
     nspikes = 0
 
+    filtered_chunks = []
     # Loop through all chunks with overlap.
     for chunk in raw_data.chunks(chunk_size=chunk_size,
                                  chunk_overlap=chunk_overlap,):
@@ -226,38 +252,24 @@ def run(raw_data=None, experiment=None, prm=None, probe=None,
             chunk_low_keep = chunk_low[i//16:j//16,:]
             experiment.recordings[chunk.recording].low.append(convert_dtype(chunk_low_keep, np.int16))
 
-        # Apply thresholds.
-        chunk_detect, chunk_threshold = apply_threshold(chunk_fil,
-            threshold=threshold, **prm)
+        filtered_chunks.append(chunk_fil)
 
-        # Remove dead channels.
-        dead = np.setdiff1d(np.arange(nchannels), probe.channels)
-        chunk_detect[:,dead] = 0
-        chunk_threshold.strong[:,dead] = 0
-        chunk_threshold.weak[:,dead] = 0
+    debug("Filtering complete")
 
-        # Find connected component (strong threshold). Return list of
-        # Component instances.
-        components = connected_components(
-            chunk_strong=chunk_threshold.strong,
-            chunk_weak=chunk_threshold.weak,
-            probe_adjacency_list=probe.adjacency_list,
-            chunk=chunk, **prm)
+    pool = multiprocessing.Pool()
+    all_waveforms = pool.map(extract_spikes,filtered_chunks)
 
-        # Now we extract the spike in each component.
-        waveforms = extract_waveforms(chunk_detect=chunk_detect,
-            threshold=threshold, chunk_fil=chunk_fil, chunk_raw=chunk_raw,
-            probe=probe, components=components, **prm)
+    for waveforms in all_waveforms:
 
-        # Log number of spikes in the chunk.
-        nspikes += len(waveforms)
+        # # Log number of spikes in the chunk.
+        # nspikes += len(waveforms)
 
         # We sort waveforms by increasing order of fractional time.
         [add_waveform(experiment, waveform) for waveform in sorted(waveforms)]
 
-        # Update the progress bar.
-        progress_bar.update(rec/float(nrecs) + (float(s_end) / (nsamples*nrecs)),
-            '%d spikes found.' % (nspikes))
+        # # Update the progress bar.
+        # progress_bar.update(rec/float(nrecs) + (float(s_end) / (nsamples*nrecs)),
+        #     '%d spikes found.' % (nspikes))
 
         # DEBUG: keep only the first shank.
         if _debug:
